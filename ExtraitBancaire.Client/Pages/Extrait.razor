@@ -1,0 +1,130 @@
+@page "/extrait"
+@using ExtraitBancaire.Common.Models
+@inject HttpClient Http
+@using System.Text.Json;
+
+<PageTitle>Extrait Bancaire</PageTitle>
+
+<div class="container">
+    <h1 class="mb-4">Extrait Bancaire</h1>
+
+    @if (!string.IsNullOrEmpty(Error))
+    {
+        <div class="alert alert-danger" role="alert">
+            @Error
+        </div>
+    }
+
+    @if (extractionResult == null)
+    {
+        <p><em>Chargement...</em></p>
+    }
+    else
+    {
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Informations du relevé</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <p><strong>Banque :</strong> @extractionResult.Data.NomBanque</p>
+                        <p><strong>RIB :</strong> @extractionResult.Data.ReleveIdentiteBancaire</p>
+                        <p><strong>Période :</strong> @extractionResult.Data.BatcheDate</p>
+                    </div>
+                    <div class="col-md-6">
+                        <p><strong>Solde Initial :</strong> @(extractionResult.Data.SoldeInitial.CreditSoldeInitial - extractionResult.Data.SoldeInitial.DebitSoldeInitial) €</p>
+                        <p><strong>Date Solde Initial :</strong> @extractionResult.Data.SoldeInitial.DateSoldeInitial</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>Date Opération</th>
+                        <th>Date Valeur</th>
+                        <th>Libellé</th>
+                        <th>Débit</th>
+                        <th>Crédit</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var operation in extractionResult.Data.Operations)
+                    {
+                        <tr>
+                            <td>@operation.DateOperation</td>
+                            <td>@operation.DateValeur</td>
+                            <td>@operation.DescriptionOp</td>
+                            <td class="text-end">@(operation.DebitOp?.ToString("N2") ?? "-")</td>
+                            <td class="text-end">@(operation.CreditOp?.ToString("N2") ?? "-")</td>
+                        </tr>
+                    }
+                </tbody>
+                <tfoot>
+                    <tr class="table-info">
+                        <td colspan="3" class="text-end"><strong>Totaux</strong></td>
+                        <td class="text-end"><strong>@extractionResult.Data.SoldeFinal.TotalDebit.ToString("N2")</strong></td>
+                        <td class="text-end"><strong>@extractionResult.Data.SoldeFinal.TotalCredit.ToString("N2")</strong></td>
+                    </tr>
+                    <tr class="table-primary">
+                        <td colspan="3" class="text-end"><strong>Nouveau Solde</strong></td>
+                        <td colspan="2" class="text-end">
+                            <strong>@extractionResult.Data.SoldeFinal.NouveauSoldeAu.ToString("N2") € 
+                            (@extractionResult.Data.SoldeFinal.DirectionNouveauSoldeAu?.ToUpper())</strong>
+                        </td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    }
+</div>
+
+<style>
+    .text-end {
+        text-align: right;
+    }
+    .table tfoot tr td {
+        border-top: 2px solid #dee2e6;
+    }
+</style>
+
+@code {
+    private ExtractionResult? extractionResult;
+    private string? Error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            // Récupérer le dernier résultat d'extraction
+            Console.WriteLine("Tentative de chargement du dernier résultat d'extraction...");
+            extractionResult = await Http.GetFromJsonAsync<ExtractionResult>("extractpdf/result/latest");
+            
+            if (extractionResult != null)
+            {
+                Console.WriteLine($"Résultat d'extraction chargé: {JsonSerializer.Serialize(extractionResult)}");
+                if (extractionResult.Data?.Operations != null && extractionResult.Data.Operations.Any())
+                {
+                    Console.WriteLine($"Nombre d'opérations dans le résultat: {extractionResult.Data.Operations.Count}");
+                }
+                else
+                {
+                    Console.WriteLine("Aucune opération trouvée dans le résultat d'extraction.");
+                }
+            }
+            else
+            {
+                Console.WriteLine("Le résultat d'extraction est null.");
+                Error = "Aucun résultat d'extraction disponible.";
+            }
+        }
+        catch (Exception ex)
+        {
+            Error = $"Erreur lors du chargement des extraits: {ex.Message}";
+            Console.WriteLine(Error);
+        }
+    }
+} 

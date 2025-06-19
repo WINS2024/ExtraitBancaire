@@ -9,13 +9,19 @@ namespace ExtraitBancaire.Common.Models
         public string RunId { get; set; }
 
         [JsonPropertyName("data")]
-        public List<DataItem> Data { get; set; }
+        public DataItem Data { get; set; }
 
         [JsonPropertyName("extraction_agent_id")]
         public string ExtractionAgentId { get; set; }
 
         [JsonPropertyName("extraction_metadata")]
         public ExtractionMetadata ExtractionMetadata { get; set; }
+
+        [JsonPropertyName("status")]
+        public string Status { get; set; }
+
+        [JsonPropertyName("error")]
+        public string Error { get; set; }
     }
 
     public class DataItem
@@ -90,7 +96,7 @@ namespace ExtraitBancaire.Common.Models
     public class ExtractionMetadata
     {
         [JsonPropertyName("field_metadata")]
-        public List<object> FieldMetadata { get; set; }
+        public Dictionary<string, object> FieldMetadata { get; set; }
 
         [JsonPropertyName("usage")]
         public Usage Usage { get; set; }

@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  mariadb:
+    image: mariadb:10.6
+    container_name: extraitbancaire_mariadb
+    ports:
+      - "3308:3306" # Mappe le port 3308 de l'hôte au port 3306 du conteneur (port MariaDB par défaut)
+    environment:
+      MYSQL_ROOT_PASSWORD: 0000 # Utilisez un mot de passe fort en production
+      MYSQL_DATABASE: extraitbancaire
+    volumes:
+      - mariadb_data:/var/lib/mysql # Pour la persistance des données
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost", "--silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: ExtraitBancaire.Api/Dockerfile
+    container_name: extraitbancaire_api
+    ports:
+      - "8080:8080" # Mappe le port 8080 de l'hôte au port 8080 du conteneur (port de votre API)
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development # Ou Production si vous configurez appsettings.Production.json
+      ConnectionStrings__DefaultConnection: "Server=mariadb;Port=3306;Database=extraitbancaire;Uid=root;Pwd=0000;" # Utilise le nom du service MariaDB
+      API_KEY: "llx-SHIS0Rjodz7yEdOBkjwDkOSXdiZ1VtT5msR9XLzwnvvGOt8f" # Mettre à jour avec votre clé API réelle en production
+      EXTRACTION_AGENT: "0a4216cf-d883-448a-a9bf-2df431244f6b" # Mettre à jour avec votre agent d'extraction réel en production
+    depends_on:
+      mariadb:
+        condition: service_healthy # Assure que MariaDB est prêt avant de démarrer l'API
+
+  client:
+    build:
+      context: .
+      dockerfile: ExtraitBancaire.Client/Dockerfile
+    container_name: extraitbancaire_client
+    ports:
+      - "80:80" # Mappe le port 80 de l'hôte au port 80 du conteneur (port Nginx par défaut)
+    depends_on:
+      - api # Assure que l'API est démarrée avant le client
+
+volumes:
+  mariadb_data: 

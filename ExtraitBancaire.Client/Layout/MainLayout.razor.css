@@ -1,3 +1,15 @@
+.page, main, article.content {
+    overflow: visible !important;
+    position: static !important;
+}
+
+/* Forcer le modal au-dessus de tout */
+body > .modal,
+body > .modal-backdrop {
+    position: fixed !important;
+    z-index: 2000 !important;
+}
+
 .page {
     position: relative;
     display: flex;

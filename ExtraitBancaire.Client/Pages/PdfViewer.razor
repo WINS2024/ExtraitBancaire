@@ -6,154 +6,413 @@
 @using ExtraitBancaire.Common.Models;
 @using System.Text.Json;
 @using System.Globalization;
+@using System.Text.Json.Serialization;
+@inject HttpClient Http
+@inject IJSRuntime JSRuntime
 
-<div class="d-flex align-items-baseline mb-4">
-    <h3 class="me-3">Visualisation des extraits bancaires</h3>
+<PageTitle>Gestion des extraits bancaires</PageTitle>
+
+<div class="container-fluid">
+    <h3 class="mb-4">Gestion des extraits bancaires par mois</h3>
+    <button class="btn btn-secondary" @onclick="ShowBootstrapModal">Test Modal Bootstrap</button>
+    <button class="btn btn-info" @onclick="ShowPdfViewerModal">Test Modal PDF Viewer</button>
+
+    @if (!string.IsNullOrEmpty(Error))
+    {
+        <div class="alert alert-danger" role="alert">
+            @Error
+        </div>
+    }
+
+    <div class="table-responsive">
+        <table class="table table-bordered table-hover">
+            <thead class="table-light">
+                <tr>
+                    <th>Mois</th>
+                    <th>Solde Initial</th>
+                    <th>Solde Final</th>
+                    <th>Total Débit</th>
+                    <th>Total Crédit</th>
+                    <th>Mouvement Net</th>
+                    <th>Nombre d'opérations</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var month in MonthlyData)
+                {
+                    <tr>
+                        <td>@month.MonthName</td>
+                        <td class="text-end">@month.InitialBalance.ToString("N2") €</td>
+                        <td class="text-end">@month.FinalBalance.ToString("N2") €</td>
+                        <td class="text-end">@month.TotalDebit.ToString("N2") €</td>
+                        <td class="text-end">@month.TotalCredit.ToString("N2") €</td>
+                        <td class="text-end @(month.NetMovement >= 0 ? "text-success" : "text-danger")">@month.NetMovement.ToString("N2") €</td>
+                        <td class="text-center">@month.OperationCount</td>
+                        <td>
+                            <button class="btn btn-primary btn-sm" @onclick="() => OpenPdfViewerModal(month.Month)">
+                                <i class="oi oi-document"></i> Déposer PDF
+                            </button>
+                            @if (month.OperationCount > 0)
+                            {
+                                <button class="btn btn-info btn-sm ms-2" @onclick="() => OpenPdfViewerForEdit(month.Month)">
+                                    <i class="oi oi-pencil"></i> Modifier
+                                </button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
 </div>
 
-<div class="row mb-4">
-    <div class="col-md-6" style="border-right: 1px solid #ddd; padding-right: 20px;">
-        <div class="card">
-            <div class="card-body" style="background-color: #f8f9fa;">
-                <div class="row">
-                    <div class="col-md-6">
-                        <div class="mb-1">
-                            <label for="identiteBancaire" class="form-label text-primary">Identité Bancaire</label>
-                            <InputText id="identiteBancaire" @bind-Value="IdentiteBancaire" class="form-control small-input" readonly />
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <div class="mb-1">
-                            <label for="nomBanque" class="form-label text-primary">Nom de la Banque</label>
-                            <InputText id="nomBanque" @bind-Value="NomBanque" class="form-control small-input" readonly />
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <div class="mb-1">
-                            <label class="form-label text-primary">Solde Initial</label>
-                            <div class="input-group">
-                                <InputNumber @bind-Value="SoldeInitial" class="form-control small-input" readonly />
-                                <span class="input-group-text" style="background-color: #e3f2fd; color: #0d6efd;">@(CreditSoldeInitial > 0 ? "CRÉDITEUR" : (DebitSoldeInitial > 0 ? "DÉBITEUR" : ""))</span>
+@if (showSplitModal)
+{
+    <div class="modal fade show devisepdf" style="display: block;" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable" style="max-width: 95vw; height: 100vh; min-height: 0;">
+            <div class="modal-content" style="height: 100vh; min-height: 0;">
+                <div class="modal-header">
+                    <h5 class="modal-title">Diviser le PDF</h5>
+                    <button type="button" class="btn-close" @onclick="CloseSplitModal"></button>
+                </div>
+                <div class="modal-body d-flex flex-column" style="height: 100%; min-height: 0;">
+                    <!-- Partie haute : mode de division + miniatures dans un cadre -->
+                    <div class="p-3 border rounded bg-light mb-3" style="flex: 0 0 auto;">
+                        <div class="row">
+                            <div class="col-md-5 col-lg-4">
+                                <!-- Bloc Mode de division -->
+                                <h6 class="mb-3">Mode de division</h6>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="radio" name="splitMode" id="splitModePerPage"
+                                           checked="@(splitMode == SplitMode.PerPage)"
+                                           @onchange="@(() => { splitMode = SplitMode.PerPage; OnSplitModeChanged(); })">
+                                    <label class="form-check-label" for="splitModePerPage">
+                                        <strong>Par page</strong>
+                                        <br />
+                                        <small class="text-muted">Chaque page sera créée comme un fichier séparé</small>
+                                    </label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="splitMode" id="splitModeCustom"
+                                           checked="@(splitMode == SplitMode.Custom)"
+                                           @onchange="@(() => { splitMode = SplitMode.Custom; OnSplitModeChanged(); })">
+                                    <label class="form-check-label" for="splitModeCustom">
+                                        <strong>Personnalisé</strong>
+                                        <br />
+                                        <small class="text-muted">Choisissez votre configuration de division</small>
+                                    </label>
+                                </div>
+                                @if (splitMode == SplitMode.Custom)
+                                {
+                                    <div class="mt-3 mb-0">
+                                        <label class="form-label">
+                                            <strong>Configuration de division :</strong>
+                                        </label>
+                                        <div class="input-group">
+                                            <input type="text" class="form-control"
+                                                   placeholder="Ex: 1.3.4/2 (Fichier 1: pages 1,3,4 ; Fichier 2: page 2)"
+                                                   @bind="customSplitConfiguration" />
+                                            <div class="input-group-append">
+                                                <button class="btn btn-outline-secondary" type="button" @onclick="ApplyCustomConfiguration" style="min-width: 110px;">
+                                                    <i class="oi oi-check"></i> Appliquer
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <small class="form-text text-muted">
+                                            Format : chaque groupe de pages séparé par '/' crée un fichier PDF. Exemple : <b>1.3.4/2</b> (Fichier 1: pages 1,3,4 ; Fichier 2: page 2). Les points séparent les pages ou plages à inclure dans chaque fichier.<br />
+                                            Plages possibles : <b>1-2.4/3</b> (Fichier 1: pages 1,2,4 ; Fichier 2: page 3)
+                                        </small>
+                                        @if (!string.IsNullOrEmpty(customConfigurationMessage))
+                                        {
+                                            <div class="alert mt-2 @(customConfigurationMessage.StartsWith("Succès") ? "alert-success" : "alert-danger")" style="font-size: 0.875rem;">
+                                                @customConfigurationMessage
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                <div class="mt-3 mb-3">
+                                    <button class="btn btn-primary" @onclick="SplitPdf" disabled="@(pdfThumbnails.Count == 0 || isSplitting)">
+                                        @if (isSplitting)
+                                        {
+                                            <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                                            <span>Division en cours...</span>
+                                        }
+                                        else
+                                        {
+                                            <span>Diviser le PDF</span>
+                                        }
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="col-md-7 col-lg-8">
+                                <!-- Miniatures PDF -->
+                                <div class="d-flex flex-row gap-2 overflow-auto pb-2 w-100" style="min-height: 120px;">
+                                    @if (isThumbnailsLoading)
+                                    {
+                                        <div class="d-flex align-items-center justify-content-center w-100" style="height: 90px;">
+                                            <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                                            <span>Chargement des miniatures...</span>
+                                        </div>
+                                    }
+                                    else if (pdfThumbnails.Count == 0)
+                                    {
+                                        <div class="d-flex align-items-center justify-content-center w-100" style="height: 90px; color: #888;">
+                                            <span>Aucune miniature à afficher.</span>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        @for (int i = 0; i < pdfThumbnails.Count; i++)
+                                        {
+                                            var index = i;
+                                            <div class="card flex-shrink-0" style="width: 120px; border: @(selectedPagesForSplit.Contains(i) ? "2px solid #007bff" : "1px solid #ccc");">
+                                                <img src="@pdfThumbnails[i]" class="card-img-top" style="height: 90px; object-fit: cover;" />
+                                                <div class="card-body p-2 text-center">
+                                                    <div>Page @(i + 1)</div>
+                                                </div>
+                                            </div>
+                                        }
+                                    }
+                                </div>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-6">
-                        <div class="mb-1">
-                            <label class="form-label text-primary">Solde Final</label>
-                            <div class="input-group">
-                                <InputNumber @bind-Value="NouveauSoldeAu" class="form-control small-input" readonly />
-                                <span class="input-group-text" style="background-color: #e3f2fd; color: #0d6efd;">@(DirectionNouveauSoldeAu?.ToUpper() ?? "")</span>
-                            </div>
+                    <!-- Partie basse : résultats dans un cadre -->
+                    <div class="p-3 border rounded bg-light flex-grow-1 d-flex flex-column" style="min-height: 0; height: 100%;">
+                        <div class="flex-grow-1 d-flex flex-column" style="min-height: 0; height: 100%;">
+                            @if (splitFileBase64s != null && splitFileBase64s.Count > 0)
+                            {
+                                <h6>Fichiers créés après division</h6>
+                                <div class="split-files-container flex-grow-1 d-flex flex-row" style="height: 100%; min-height: 0; overflow-y: auto; flex: 1 1 0;">
+                                    @for (int i = 0; i < splitFileBase64s.Count; i++)
+                                    {
+                                        <div class="split-file-item d-flex flex-column" style="height: 100%; min-width: 288px; min-height: 0; flex: 1 1 0;">
+                                            <div class="split-file-header">
+                                                <span class="split-file-name">@splitFileNames[i]</span>
+                                                <button class="btn btn-outline-primary btn-sm" @onclick="() => DownloadSplitFile(i)">
+                                                    <i class="oi oi-download"></i> Télécharger
+                                                </button>
+                                            </div>
+                                            <div class="split-file-preview flex-grow-1 d-flex" style="height: 100%; min-height: 0; flex: 1 1 auto;">
+                                                <iframe src="data:application/pdf;base64,@splitFileBase64s[i]" style="width: 100%; height: 100%; border: none; display: block;"></iframe>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
                         </div>
                     </div>
                 </div>
             </div>
         </div>
+    </div>
+    <div class="modal-backdrop fade show devisepdf"></div>
+}
 
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <h4 class="mb-0">Details de l'extrait</h4>
-            <button class="btn btn-outline-secondary btn-sm" @onclick="ClearAllFilters">
-                <i class="oi oi-x"></i> Effacer tous les filtres
-            </button>
+@if (showBootstrapModal)
+{
+    <div class="modal fade show" style="display: block;" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Test Modal Bootstrap</h5>
+                    <button type="button" class="btn-close" @onclick="CloseBootstrapModal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Ceci est un test de modal Bootstrap natif.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseBootstrapModal">Fermer</button>
+                </div>
+            </div>
         </div>
-        <div style="height: 65vh; overflow-y: auto; border: 1px solid #ddd; border-radius: 5px;">
-            <table class="table table-bordered table-striped mb-0">
-                <thead>
-                    <tr>
-                        <th style="position: sticky; top: 0; background-color: white; z-index: 10;">N°</th>
-                        <th style="position: sticky; top: 0; background-color: white; z-index: 10;">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <span>Date</span>
-                                @if (filterDate.HasValue)
-                                {
-                                    <button class="btn btn-link btn-sm p-0" @onclick="@(() => ClearFilter("date"))">
-                                        <i class="oi oi-x"></i>
-                                    </button>
-                                }
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@if (showPdfViewerModal)
+{
+    <div class="modal fade show" style="display: block;" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable" style="max-width: 95vw; height: 90vh;">
+            <div class="modal-content" style="height: 90vh; min-height: 600px;">
+                <div class="modal-header">
+                    <h5 class="modal-title">Gestion des extraits bancaires - @GetMonthName(selectedMonthForModal)</h5>
+                    <button type="button" class="btn-close" @onclick="ClosePdfViewerModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row">
+                        <!-- Colonne de gauche : Infos + tableau -->
+                        <div class="col-md-6 d-flex flex-column h-100">
+                            <h6>Informations bancaires</h6>
+                            <div class="row mb-3">
+                                <div class="col-6">
+                                    <label class="form-label">RIB</label>
+                                    <input type="text" class="form-control" @bind="IdentiteBancaire" />
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label">Nom de la banque</label>
+                                    <input type="text" class="form-control" @bind="NomBanque" />
+                                </div>
                             </div>
-                            <InputDate @bind-Value="filterDate" class="form-control small-input mt-1" @onchange="OnDateFilterChanged" />
-                        </th>
-                        <th style="position: sticky; top: 0; background-color: white; z-index: 10;">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <span>Libelle</span>
-                                @if (!string.IsNullOrEmpty(filterLibelle))
-                                {
-                                    <button class="btn btn-link btn-sm p-0" @onclick="@(() => ClearFilter("libelle"))">
-                                        <i class="oi oi-x"></i>
-                                    </button>
-                                }
+                            <div class="row mb-3">
+                                <div class="col-6">
+                                    <label class="form-label">Solde initial</label>
+                                    <input type="number" step="0.01" class="form-control" @bind="SoldeInitial" />
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label">Nouveau solde</label>
+                                    <input type="number" step="0.01" class="form-control" @bind="NouveauSoldeAu" />
+                                </div>
                             </div>
-                            <InputText @bind-Value="filterLibelle" class="form-control small-input mt-1" @oninput="OnLibelleFilterChanged" />
-                        </th>
-                        <th style="position: sticky; top: 0; background-color: white; z-index: 10;">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <span>Debit</span>
-                                @if (filterDebit.HasValue)
-                                {
-                                    <button class="btn btn-link btn-sm p-0" @onclick="@(() => ClearFilter("debit"))">
-                                        <i class="oi oi-x"></i>
-                                    </button>
-                                }
+                            <div class="extrait-details-container flex-grow-1 d-flex flex-column">
+                                <div class="mt-4">
+                                    <h6>Détails de l'extrait</h6>
+                                    <div class="table-responsive flex-grow-1">
+                                        <table class="table table-bordered table-hover" id="extraitTable">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th style="width:30px">N°</th>
+                                                    <th style="width:110px">Date</th>
+                                                    <th style="width:40%">Libellé</th>
+                                                    <th style="width:80px">Débit</th>
+                                                    <th style="width:80px">Crédit</th>
+                                                    <th style="width:90px">Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                @if (extractedEntries.Any())
+                                                {
+                                                    @for (int i = 0; i < extractedEntries.Count; i++)
+                                                    {
+                                                        var entry = extractedEntries[i];
+                                                        <tr class="@(entry.IsManuallyAdded ? "manually-added" : "")">
+                                                            <td>@(i+1)</td>
+                                                            <td><input type="date" class="form-control" @bind="entry.Date" /></td>
+                                                            <td><input type="text" class="form-control input-libelle" @bind="entry.Libelle" /></td>
+                                                            <td><input type="number" step="0.01" class="form-control input-small" @bind="entry.Debit" /></td>
+                                                            <td><input type="number" step="0.01" class="form-control input-small" @bind="entry.Credit" /></td>
+                                                            <td>
+                                                                <div class="btn-group" role="group">
+                                                                    <button class="btn btn-outline-primary btn-sm" @onclick="() => MoveEntryUp(entry)" title="Monter">
+                                                                        <i class="oi oi-arrow-top"></i>
+                                                                    </button>
+                                                                    <button class="btn btn-outline-primary btn-sm" @onclick="() => MoveEntryDown(entry)" title="Descendre">
+                                                                        <i class="oi oi-arrow-bottom"></i>
+                                                                    </button>
+                                                                    <button class="btn btn-outline-danger btn-sm" @onclick="() => DeleteEntry(entry)" title="Supprimer">
+                                                                        <i class="oi oi-trash"></i>
+                                                                    </button>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    <tr>
+                                                        <td colspan="6" class="text-center text-muted py-4">
+                                                            <i class="oi oi-document" style="font-size: 2rem; opacity: 0.5;"></i>
+                                                            <br />
+                                                            <small>Aucune opération extraite</small>
+                                                        </td>
+                                                    </tr>
+                                                }
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div class="mt-3">
+                                        <button class="btn btn-success" @onclick="() => AddEntry()">
+                                            <i class="oi oi-plus"></i> Ajouter une opération
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
-                            <InputNumber @bind-Value="filterDebit" class="form-control small-input mt-1" @oninput="OnDebitFilterChanged" Step="0.01" />
-                        </th>
-                        <th style="position: sticky; top: 0; background-color: white; z-index: 10;">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <span>Credit</span>
-                                @if (filterCredit.HasValue)
-                                {
-                                    <button class="btn btn-link btn-sm p-0" @onclick="@(() => ClearFilter("credit"))">
-                                        <i class="oi oi-x"></i>
-                                    </button>
-                                }
+                        </div>
+                        <!-- Colonne de droite : Upload + aperçu PDF -->
+                        <div class="col-md-6 d-flex flex-column h-100 border-start" style="border-left: 2px solid #dee2e6;">
+                            <h6 class="mb-2 text-center">Aperçu du PDF</h6>
+                            <div class="mb-3">
+                                <div class="d-flex gap-2 align-items-center">
+                                    <InputFile OnChange="HandleFileSelection" accept=".pdf" class="form-control" />
+                                    @if (!string.IsNullOrEmpty(selectedFileName))
+                                    {
+                                        <button class="btn btn-primary btn-sm" @onclick="ExtractPdf" disabled="@isLoading">
+                                            @if (isLoading)
+                                            {
+                                                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                                <span>Extraction...</span>
+                                            }
+                                            else
+                                            {
+                                                <span>Extraire</span>
+                                            }
+                                        </button>
+                                    }
+                                </div>
                             </div>
-                            <InputNumber @bind-Value="filterCredit" class="form-control small-input mt-1" @oninput="OnCreditFilterChanged" Step="0.01" />
-                        </th>
-                        <th style="position: sticky; top: 0; background-color: white; z-index: 10;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @if (FilteredEntries == null || !FilteredEntries.Any())
-                    {
-                        <tr><td colspan="4" class="text-center">Aucune donnee correspondante.</td></tr>
-                    }
-                    else
-                    {
-                        int i = 1;
-                        @foreach (var entry in FilteredEntries)
-                        {
-                            <tr>
-                                <td>@(i++)</td>
-                                <td><InputDate @bind-Value="entry.Date" class="form-control" /></td>
-                                <td><InputText @bind-Value="entry.Libelle" class="form-control" /></td>
-                                <td><InputNumber @bind-Value="entry.Debit" class="form-control" Step="0.01" @oninput="RecalculateTotals" /></td>
-                                <td><InputNumber @bind-Value="entry.Credit" class="form-control" Step="0.01" @oninput="RecalculateTotals" /></td>
-                                <td>
-                                    <button class="btn btn-danger btn-sm me-1" @onclick="@(() => DeleteEntry(entry))">
-                                        <i class="oi oi-trash"></i>
+                            @if (!string.IsNullOrEmpty(selectedFileName))
+                            {
+                                <div class="mb-3">
+                                    <p class="mb-0 text-muted">Fichier sélectionné : @selectedFileName</p>
+                                </div>
+                            }
+                            <div class="pdf-preview-container border rounded mt-2 flex-grow-1 d-flex flex-column" style="min-height: 0;">
+                                @if (!string.IsNullOrEmpty(pdfSrc))
+                                {
+                                    <iframe src="@pdfSrc" style="flex: 1 1 0; width: 100%; height: 100%; min-height: 0; border: none;"></iframe>
+                                }
+                                else
+                                {
+                                    <div class="pdf-placeholder d-flex flex-column align-items-center justify-content-center h-100">
+                                        <i class="oi oi-document" style="font-size: 3rem; opacity: 0.3; margin-bottom: 1rem;"></i>
+                                        <p class="text-muted mb-0">Aucun PDF sélectionné</p>
+                                        <small class="text-muted">Sélectionnez un fichier PDF pour l'afficher ici</small>
+                                    </div>
+                                }
+                                <!-- Bouton Diviser PDF en bas, centré -->
+                                <div class="mt-3 d-flex flex-column align-items-center justify-content-end w-100">
+                                    <hr class="w-100 mb-3 mt-3" />
+                                    <div class="mb-2 fw-bold text-center" style="font-size: 1.1rem;">Diviser le PDF</div>
+                                    <button class="btn btn-warning px-5 py-2 fw-bold" style="min-width: 220px; font-size: 1.1rem;" @onclick="OpenSplitModal">
+                                        <i class="oi oi-scissors me-2"></i> Diviser PDF
                                     </button>
-                                    <button class="btn btn-success btn-sm" @onclick="@(() => AddEntry(entry))">
-                                        <i class="oi oi-plus"></i>
-                                    </button>
-                                </td>
-                            </tr>
-                        }
-                    }
-                </tbody>
-            </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="ClosePdfViewerModal">Fermer</button>
+                    <button type="button" class="btn btn-primary" @onclick="SaveMonthlyData">Sauvegarder</button>
+                </div>
+            </div>
         </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
 
         <style>
+    /* Styles de base pour la table */
             .table-bordered th, .table-bordered td {
                 border: 1px solid #dee2e6;
             }
-            .table-striped tbody tr:nth-of-type(odd) {
-                background-color: rgba(0, 0, 0, 0.03);
-            }
-            .table-striped tbody tr:nth-of-type(even) {
-                background-color: #fff;
-            }
-            /* Remettre la hauteur precedente pour les champs de la table */
+
+    /* Styles pour les lignes ajoutées manuellement (priorité maximale) */
+    #extraitTable tbody tr.manually-added,
+    #extraitTable tbody tr.manually-added td {
+        background-color: #e6ffe6 !important; /* Force la couleur verte pâle */
+        background-image: none !important; /* S'assurer qu'aucune image de fond n'interfère */
+    }
+
+    /* S'assurer que la couleur de fond persiste au survol */
+    #extraitTable tbody tr.manually-added:hover,
+    #extraitTable tbody tr.manually-added:hover td {
+        background-color: #e6ffe6 !important; /* Maintenir la couleur survol */
+        background-image: none !important; /* Maintenir l'absence d'image de fond au survol */
+    }
+
+    /* Styles pour les champs de formulaire */
             .table td .form-control,
             .table th .form-control {
                 height: 28px; 
@@ -161,351 +420,597 @@
                 font-size: .875rem;
                 line-height: 1.5;
             }
-            /* Alignement du texte pour les colonnes Débit et Crédit */
+
+    /* Alignements */
             .table th:nth-child(3), .table td:nth-child(3),
             .table th:nth-child(4), .table td:nth-child(4) {
                 text-align: right;
             }
-            /* Alignement du texte pour les colonnes Date et Libellé */
             .table th:nth-child(1), .table td:nth-child(1),
             .table th:nth-child(2), .table td:nth-child(2) {
                 text-align: left;
             }
-        </style>
 
-        @if (extractedEntries != null && extractedEntries.Any())
-        {
-            <div class="mt-3 p-2 border rounded" style="background-color: #f8f9fa;">
-                <div class="row">
-                    <div class="col-4">
-                        <label class="form-label small">Nouveau Solde :</label>
-                        <InputNumber @bind-Value="NouveauSoldeAu" class="form-control small-input" Step="0.01" readonly />
-                        <small class="text-muted">@DirectionNouveauSoldeAu</small>
-                    </div>
-                    <div class="col-4">
-                        <label class="form-label small">Total Debit :</label>
-                        <InputNumber @bind-Value="TotalDebit" class="form-control small-input" Step="0.01" readonly />
-                    </div>
-                    <div class="col-4">
-                        <label class="form-label small">Total Credit :</label>
-                        <InputNumber @bind-Value="TotalCredit" class="form-control small-input" Step="0.01" readonly />
-                    </div>
-                </div>
-            </div>
-        }
-    </div>
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-body" style="background-color: #f8f9fa;">
-                <h4>Apercu du PDF</h4>
-                <div class="d-flex align-items-center mb-3">
-                    <InputFile OnChange="HandleFileSelected" accept=".pdf" class="form-control me-2 rounded" />
-                    <button class="btn btn-info rounded" @onclick="ExtractPdf" disabled="@isLoading">@buttonText</button>
-                </div>
-                <div class="d-flex align-items-center justify-content-center mb-3">
-                    <label for="batcheDate" class="form-label text-primary mb-0 me-2">Mois du Relevé</label>
-                    <InputText id="batcheDate" @bind-Value="BatcheDate" class="form-control form-control-sm" disabled style="width: 120px;" />
-                </div>
-                <div style="border: 1px solid #ddd; height: calc(100vh - 250px); overflow: auto; margin-top: 10px;">
-                    @if (!string.IsNullOrEmpty(pdfSrc))
-                    {
-                        <iframe src="@pdfSrc" width="100%" height="100%"></iframe>
-                    }
-                    else
-                    {
-                        <p>Veuillez telecharger un fichier PDF pour l'afficher.</p>
-                    }
-                </div>
-                @if (!string.IsNullOrEmpty(errorMessage))
-                {
-                    <p class="text-danger">Erreur: @errorMessage</p>
-                }
-            </div>
-        </div>
-    </div>
-</div>
-
-@* Modale de chargement *@
-<div class="modal" tabindex="-1" style="display: @(isLoading ? "block" : "none");" aria-modal="true" role="dialog">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-body text-center">
-                <div class="spinner-border text-primary" role="status">
-                    <span class="visually-hidden">Chargement...</span>
-                </div>
-                <p class="mt-3">Extraction en cours, veuillez patienter...</p>
-            </div>
-        </div>
-    </div>
-</div>
-
-@code {
-    [Inject] HttpClient Http { get; set; }
-    private string? pdfSrc;
-    private List<ExtraitBancaireEntry>? extractedEntries;
-    private bool isLoading = false;
-    private string buttonText = "Extraire";
-    private string? errorMessage;
-    private decimal TotalDebit { get; set; }
-    private decimal TotalCredit { get; set; }
-
-    // Nouveaux champs
-    private string? IdentiteBancaire { get; set; }
-    private decimal DebitSoldeInitial { get; set; }
-    private decimal CreditSoldeInitial { get; set; }
-    private decimal SoldeInitial { get; set; }
-
-    private string NomBanque { get; set; }
-    private string BatcheDate { get; set; }
-
-    // Nouveaux champs pour Solde Final
-    private decimal NouveauSoldeAu { get; set; }
-    private string DirectionNouveauSoldeAu { get; set; }
-
-    // Proprietes pour les filtres
-    private DateTime? filterDate { get; set; }
-    private string? filterLibelle { get; set; }
-    private decimal? filterDebit { get; set; }
-    private decimal? filterCredit { get; set; }
-
-    private IEnumerable<ExtraitBancaireEntry>? FilteredEntries => extractedEntries?.Where(entry =>
-    {
-        bool dateMatch = !filterDate.HasValue || entry.Date.Date == filterDate.Value.Date;
-        bool libelleMatch = string.IsNullOrEmpty(filterLibelle) ||
-                            (entry.Libelle?.Contains(filterLibelle, StringComparison.OrdinalIgnoreCase) ?? false);
-        bool debitMatch = !filterDebit.HasValue || entry.Debit == filterDebit.Value;
-        bool creditMatch = !filterCredit.HasValue || entry.Credit == filterCredit.Value;
-
-        return dateMatch && libelleMatch && debitMatch && creditMatch;
-    });
-
-    private async Task HandleFileSelected(InputFileChangeEventArgs e)
-    {
-        var file = e.File;
-        if (file != null && file.ContentType == "application/pdf")
-        {
-            var buffer = new byte[file.Size];
-            await file.OpenReadStream().ReadAsync(buffer);
-            pdfSrc = $"data:application/pdf;base64,{Convert.ToBase64String(buffer)}#zoom=100";
-            extractedEntries = null; // Clear previous results
-            errorMessage = null; // Clear previous errors
-            TotalDebit = 0; // Clear previous totals
-            TotalCredit = 0; // Clear previous totals
-
-            // Reinitialiser les filtres
-            filterDate = null;
-            filterLibelle = null;
-            filterDebit = null;
-            filterCredit = null;
-        }
-        else
-        {
-            pdfSrc = null;
-            // Gerer les erreurs, par exemple, afficher un message a l'utilisateur
-            Console.WriteLine("Le fichier selectionne n'est pas un PDF ou est invalide.");
-        }
+    /* Masquer les boutons de déplacement par défaut */
+    #extraitTable tr td.movement-col .btn-group {
+        opacity: 0;
+        transition: opacity 0.3s ease-in-out;
     }
 
-    private async Task ExtractPdf()
+    /* Afficher les boutons de déplacement au survol de la ligne */
+    #extraitTable tr:hover td.movement-col .btn-group {
+        opacity: 1;
+    }
+
+    /* Style pour les boutons de déplacement (pilule horizontale) */
+    #extraitTable tr td.movement-col .btn-group .btn {
+        width: 24px; /* Ajusté à 24px pour les rendre carrés */
+        height: 24px; 
+        padding: 0; 
+        line-height: 1; 
+        display: flex; 
+        align-items: center; 
+        justify-content: center;
+        border-radius: 999px; /* Forme de pilule / ronde */
+    }
+
+    /* Réinitialiser la forme pour les autres boutons de la table */
+    #extraitTable tr td .btn-group .btn:not(.movement-col .btn) {
+        border-radius: .25rem; /* Forme de capsule par défaut de Bootstrap */
+        width: auto; /* Réinitialiser la largeur */
+        height: auto; /* Réinitialiser la hauteur */
+        padding: .25rem .5rem; /* Remettre le padding par défaut */
+            }
+
+    .modal, .modal-dialog, .modal-content, .modal-body {
+        height: 100% !important;
+        min-height: 400px;
+    }
+    .d-flex.flex-row.h-100 > .col-6 {
+        height: 100%;
+        min-height: 400px;
+        overflow-y: auto;
+    }
+
+    .input-small {
+        max-width: 80px;
+        min-width: 60px;
+        width: 100%;
+        padding-right: 0;
+        padding-left: 0;
+        text-align: right;
+    }
+    .input-libelle {
+        width: 100%;
+    }
+
+    .modal.devisepdf {
+        z-index: 2000 !important;
+    }
+    .modal-backdrop.devisepdf {
+        z-index: 1999 !important;
+    }
+    .modal-body, .modal-content, .modal-dialog {
+        height: 100% !important;
+    }
+    .col-md-6 {
+        height: 100%;
+    }
+
+    /* Garantir la hauteur à 100% sur toute la chaîne pour le modal principal */
+    .modal-body > .row {
+        height: 100%;
+    }
+    .col-md-6.d-flex.flex-column.h-100 {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+    .pdf-preview-container {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+    .pdf-preview-container iframe {
+        flex: 1 1 0;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        border: none;
+    }
+
+    /* Styles pour la section détails de l'extrait */
+    .extrait-details-container {
+        min-height: 0;
+        overflow: hidden;
+    }
+    .extrait-details-container .table-responsive {
+        flex: 1 1 0;
+        min-height: 0;
+        overflow-y: auto;
+    }
+    .extrait-details-container .table {
+        margin-bottom: 0;
+    }
+
+    /* Styles pour le placeholder de l'aperçu PDF */
+    .pdf-placeholder {
+        min-height: 300px;
+        background-color: #f8f9fa;
+        border: 2px dashed #dee2e6;
+    }
+    .pdf-placeholder i {
+        color: #6c757d;
+    }
+
+    /* Styles pour les miniatures PDF horizontales */
+    .d-flex.flex-row.overflow-auto {
+        scrollbar-width: thin;
+        scrollbar-color: #6c757d #f8f9fa;
+    }
+    .d-flex.flex-row.overflow-auto::-webkit-scrollbar {
+        height: 8px;
+    }
+    .d-flex.flex-row.overflow-auto::-webkit-scrollbar-track {
+        background: #f8f9fa;
+        border-radius: 4px;
+    }
+    .d-flex.flex-row.overflow-auto::-webkit-scrollbar-thumb {
+        background: #6c757d;
+        border-radius: 4px;
+    }
+    .d-flex.flex-row.overflow-auto::-webkit-scrollbar-thumb:hover {
+        background: #495057;
+    }
+    .card.flex-shrink-0 {
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .card.flex-shrink-0:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+
+    /* Styles pour la section des fichiers divisés */
+    .split-files-container {
+        display: flex;
+        flex-direction: row;
+        gap: 1rem;
+        overflow-x: auto;
+        overflow-y: hidden;
+        max-height: 500px;
+        height: 100%;
+        min-height: 0;
+        padding-bottom: 0.5rem;
+        scrollbar-width: thin;
+        scrollbar-color: #6c757d #f8f9fa;
+    }
+    .split-file-item {
+        min-width: 288px;
+        max-width: 288px;
+        width: 288px;
+        height: 100%;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+    .split-file-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 1rem;
+        background-color: #e9ecef;
+        border-bottom: 1px solid #dee2e6;
+        border-radius: 0.375rem 0.375rem 0 0;
+    }
+    .split-file-name {
+        font-weight: 500;
+        color: #495057;
+        font-size: 0.875rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 150px;
+    }
+    .split-file-preview {
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+        flex: 1 1 auto;
+        display: flex;
+    }
+    .split-file-preview iframe {
+        width: 100%;
+        height: 100%;
+        border: none;
+        display: block;
+    }
+
+    /* Styles pour la scrollbar horizontale des fichiers divisés */
+    .split-files-container {
+        scrollbar-width: thin;
+        scrollbar-color: #6c757d #f8f9fa;
+    }
+    .split-files-container::-webkit-scrollbar {
+        height: 8px;
+    }
+    .split-files-container::-webkit-scrollbar-track {
+        background: #f8f9fa;
+        border-radius: 4px;
+    }
+    .split-files-container::-webkit-scrollbar-thumb {
+        background: #6c757d;
+        border-radius: 4px;
+    }
+    .split-files-container::-webkit-scrollbar-thumb:hover {
+        background: #495057;
+    }
+
+    .pdf-thumbnails-container {
+        display: flex;
+        flex-direction: row;
+        gap: 1rem;
+        overflow-x: auto;
+        overflow-y: hidden;
+        max-height: 110px;
+        min-height: 0;
+        padding-bottom: 0.5rem;
+    }
+    .pdf-thumbnail-item {
+        min-width: 120px;
+        max-width: 120px;
+        width: 120px;
+        height: 100%;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+    .pdf-thumbnail-item img {
+        width: 100%;
+        height: 90px;
+        object-fit: cover;
+        border-radius: 0.375rem;
+    }
+        </style>
+
+@code {
+    private List<MonthlyData> MonthlyData = new();
+    private bool showPdfViewer = false;
+    private int currentMonth = 1;
+    private List<ExtraitBancaireEntry> extractedEntries = new();
+    private string? IdentiteBancaire;
+    private string? NomBanque;
+    private decimal SoldeInitial;
+    private decimal NouveauSoldeAu;
+    private string? DirectionNouveauSoldeAu;
+    private decimal TotalDebit;
+    private decimal TotalCredit;
+    private decimal CreditSoldeInitial;
+    private decimal DebitSoldeInitial;
+    private bool isLoading = false;
+    private string buttonText = "Extraire";
+    private DateTime? filterDate;
+    private string? filterLibelle;
+    private decimal? filterDebit;
+    private decimal? filterCredit;
+    private string? CurrentPdfUrl;
+    private string? pdfSrc;
+    private string? errorMessage;
+    private string? BatcheDate;
+    private int CurrentPage = 1;
+    private int TotalPages = 1;
+    private double CurrentZoom = 1.0;
+    private string? Error;
+    private string? selectedFileName;
+    private string? pagesToSplit;
+    private string? splitPdfMessage;
+    private List<string> splitPdfsBase64 = new List<string>();
+    private IBrowserFile? file;
+    private bool showSplitModal = false;
+    private List<string> splitFileBase64s = new List<string>();
+    private List<string> splitFileNames = new List<string>();
+    private int totalPages = 0;
+    private int currentPage = 1;
+    private HashSet<int> selectedPages = new HashSet<int>();
+    private List<string> pdfThumbnails = new();
+    private bool isThumbnailsLoading = false;
+    private int? dragSourceIndex = null;
+    private List<int> selectedPagesForSplit = new();
+    private bool showBootstrapModal = false;
+    private bool showPdfViewerModal = false;
+    private int selectedMonthForModal = 1;
+    private SplitMode splitMode = SplitMode.PerPage;
+    private string customSplitConfiguration = string.Empty;
+    private string customConfigurationMessage = string.Empty;
+    private bool isSplitting = false;
+
+    public enum SplitMode
     {
-        if (string.IsNullOrEmpty(pdfSrc))
-        {
-            errorMessage = "Veuillez d'abord telecharger un fichier PDF.";
-            return;
-        }
+        PerPage,    // Chaque page = 1 fichier
+        Custom      // Configuration personnalisée
+    }
 
-        isLoading = true;
-        buttonText = "Extraction...";
-        errorMessage = null;
-        extractedEntries = null;
+    protected override async Task OnInitializedAsync()
+    {
+        InitializeMonthlyData(); // Toujours initialiser avec 12 mois
+        await LoadMonthlyData();
+    }
 
+    private void ShowBootstrapModal()
+    {
+        showBootstrapModal = true;
+        StateHasChanged();
+    }
+
+    private void ShowPdfViewerModal()
+    {
+        showPdfViewerModal = true;
+        StateHasChanged();
+    }
+
+    private async Task LoadMonthlyData()
+    {
         try
         {
-            // Remove the "data:application/pdf;base64," prefix
-            string base64Content = pdfSrc.Split(',')[1];
+            Console.WriteLine("Début du chargement des données mensuelles...");
+            // Initialiser d'abord avec les 12 mois vides
+            InitializeMonthlyData();
 
-            // Supprimer la partie ancre (#zoom=100) si elle existe
-            int hashIndex = base64Content.IndexOf('#');
-            if (hashIndex != -1)
+            // Charger les données mensuelles via l'API
+            var response = await Http.GetFromJsonAsync<List<MonthlyData>>("api/monthlydata");
+            Console.WriteLine($"Réponse reçue: {response != null}, Nombre d'éléments: {response?.Count ?? 0}");
+            
+            if (response != null && response.Any())
             {
-                base64Content = base64Content.Substring(0, hashIndex);
-            }
-
-            // Logging pour le débogage
-            Console.WriteLine($"Longueur de la chaîne Base64 à envoyer : {base64Content.Length}");
-            Console.WriteLine($"Début de la chaîne Base64 : {base64Content.Substring(0, Math.Min(base64Content.Length, 100))}");
-            Console.WriteLine($"Fin de la chaîne Base64 : {base64Content.Substring(Math.Max(0, base64Content.Length - 100))}");
-
-            // Envoi de la chaine Base64 directement en tant que StringContent
-            var content = new StringContent(base64Content, Encoding.UTF8, "text/plain");
-            var response = await Http.PostAsync("extractpdf", content);
-
-            response.EnsureSuccessStatusCode(); // Throws if not success
-
-            try 
-            {
-                var rawResponseContent = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"Réponse de l'API (brute) : {rawResponseContent}");
-
-                ExtractionResult extractionResult;
-                try
+                foreach (var item in response)
                 {
-                    // Tenter de désérialiser directement (pour le cas où l'API renverrait directement du JSON)
-                    extractionResult = JsonSerializer.Deserialize<ExtractionResult>(rawResponseContent);
-                }
-                catch (JsonException)
-                {
-                    // Si la désérialisation directe échoue, cela signifie probablement que la chaîne est échappée
-                    Console.WriteLine("La réponse JSON est échappée. Tentative de déséchappement...");
-                    string unescapedJsonString = JsonSerializer.Deserialize<string>(rawResponseContent);
-                    Console.WriteLine($"Réponse de l'API (dé-échappée) : {unescapedJsonString}");
-                    extractionResult = JsonSerializer.Deserialize<ExtractionResult>(unescapedJsonString);
-                }
-
-                if (extractionResult?.Data != null && extractionResult.Data.Any())
-                {
-                    var firstData = extractionResult.Data[0];
-                    
-                    // Mise à jour des informations d'identité bancaire
-                    IdentiteBancaire = firstData.ReleveIdentiteBancaire;
-                    NomBanque = firstData.NomBanque;
-                    BatcheDate = firstData.BatcheDate;
-                    
-                    // Mise à jour des soldes initiaux
-                    DebitSoldeInitial = firstData.SoldeInitial.DebitSoldeInitial;
-                    CreditSoldeInitial = firstData.SoldeInitial.CreditSoldeInitial;
-                    
-                    // Calcul du Solde Initial
-                    if (CreditSoldeInitial > 0)
+                    Console.WriteLine($"Traitement du mois {item.Month}: {item.MonthName}");
+                    var existingMonth = MonthlyData.FirstOrDefault(m => m.Month == item.Month);
+                    if (existingMonth != null)
                     {
-                        SoldeInitial = CreditSoldeInitial;
+                        // Mettre à jour le mois existant avec les données de la base de données
+                        existingMonth.InitialBalance = item.InitialBalance;
+                        existingMonth.FinalBalance = item.FinalBalance;
+                        existingMonth.TotalDebit = item.TotalDebit;
+                        existingMonth.TotalCredit = item.TotalCredit;
+                        existingMonth.NetMovement = item.NetMovement;
+                        existingMonth.OperationCount = item.OperationCount;
+                        existingMonth.Entries = item.Entries;
+                        existingMonth.MonthName = item.MonthName;
+                        Console.WriteLine($"Mois {item.Month} mis à jour avec {item.Entries.Count} opérations");
                     }
-                    else if (DebitSoldeInitial > 0)
-                    {
-                        SoldeInitial = DebitSoldeInitial;
-                    }
-                    else
-                    {
-                        SoldeInitial = 0; // Ou une autre valeur par defaut si necessaire
-                    }
-
-                    // Conversion des opérations
-                    extractedEntries = firstData.Operations.Select(op => 
-                    {
-                        DateTime parsedDate;
-                        if (!DateTime.TryParseExact(op.DateOperation, "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out parsedDate))
-                        {
-                            // Gérer le cas où la date ne peut pas être parsée
-                            Console.WriteLine($"Erreur de parsing de la date: {op.DateOperation}");
-                            parsedDate = default(DateTime); // Ou une autre valeur par défaut
-                        }
-
-                        return new ExtraitBancaireEntry 
-                        {
-                            Date = parsedDate,
-                            Libelle = op.DescriptionOp,
-                            Debit = op.DebitOp ?? 0,
-                            Credit = op.CreditOp ?? 0
-                        };
-                    }).ToList();
-
-                    // Utilisation des totaux fournis par l'API
-                    TotalDebit = firstData.SoldeFinal.TotalDebit;
-                    TotalCredit = firstData.SoldeFinal.TotalCredit;
-
-                    // Mise à jour du Solde Final
-                    NouveauSoldeAu = firstData.SoldeFinal.NouveauSoldeAu;
-                    DirectionNouveauSoldeAu = firstData.SoldeFinal.DirectionNouveauSoldeAu;
                 }
             }
-            catch (JsonException jsonEx)
+            else
             {
-                errorMessage = $"Erreur de désérialisation JSON : {jsonEx.Message}\nPosition : {jsonEx.BytePositionInLine}\nLigne : {jsonEx.LineNumber}";
-                Console.WriteLine($"JsonException: {jsonEx.Message}");
-                Console.WriteLine($"Position: {jsonEx.BytePositionInLine}");
-                Console.WriteLine($"Ligne: {jsonEx.LineNumber}");
+                Console.WriteLine("Aucune donnée reçue de l'API, utilisation des données initiales vides");
             }
-        }
-        catch (HttpRequestException ex)
-        {
-            errorMessage = $"Erreur de communication avec l'API : {ex.Message}";
-            Console.WriteLine($"HttpRequestException: {ex.Message}");
         }
         catch (Exception ex)
         {
-            errorMessage = $"Une erreur inattendue est survenue lors de l'extraction : {ex.Message}";
-            Console.WriteLine($"Exception: {ex.Message}");
-            Console.WriteLine($"Stack Trace: {ex.StackTrace}");
-        }
-        finally
-        {
-            isLoading = false;
-            buttonText = "Extraire";
+            Console.WriteLine($"Erreur lors du chargement des données: {ex.Message}");
+            Error = $"Erreur lors du chargement des données mensuelles: {ex.Message}";
+            // En cas d'erreur, on garde quand même les 12 mois vides
+            InitializeMonthlyData();
         }
     }
 
-    private void OnFilterChanged()
+    private void InitializeMonthlyData()
     {
-        // Debug : Afficher l'etat de tous les filtres
-        Console.WriteLine($"Filtre Date: {filterDate?.ToShortDateString() ?? "null"}, Libelle: {filterLibelle ?? "null"}, Debit: {filterDebit?.ToString("N2") ?? "null"}, Credit: {filterCredit?.ToString("N2") ?? "null"}");
-        StateHasChanged(); // Forcer la mise a jour de l'interface utilisateur
+        MonthlyData.Clear(); // Clear existing data if any, before re-initializing
+        for (int i = 1; i <= 12; i++)
+        {
+            MonthlyData.Add(new MonthlyData
+            {
+                Month = i,
+                MonthName = CultureInfo.CurrentCulture.DateTimeFormat.GetMonthName(i),
+                InitialBalance = 0,
+                FinalBalance = 0,
+                OperationCount = 0,
+                Entries = new List<ExtraitBancaireEntry>(),
+                TotalDebit = 0,
+                TotalCredit = 0,
+                NetMovement = 0
+            });
+        }
+    }
+
+    private string GetMonthName(int month)
+    {
+        return CultureInfo.CurrentCulture.DateTimeFormat.GetMonthName(month);
+    }
+
+    private string GetCurrentMonthName()
+    {
+        return GetMonthName(currentMonth);
+    }
+
+    private void OpenPdfViewerModal(int month)
+    {
+        selectedMonthForModal = month;
+        showPdfViewerModal = true;
+        StateHasChanged();
+    }
+
+    private void OpenPdfViewerForEdit(int month)
+    {
+        currentMonth = month;
+        showPdfViewer = true;
+        ResetPdfViewerData(); // Réinitialise l'état avant de charger les nouvelles données
+
+        var monthData = MonthlyData.FirstOrDefault(m => m.Month == currentMonth);
+        if (monthData != null)
+        {
+            extractedEntries = new List<ExtraitBancaireEntry>(monthData.Entries);
+            IdentiteBancaire = ""; // Supposons que ces champs ne sont pas stockés par mois dans DB, ou chargez-les si c'est le cas.
+            NomBanque = "";
+            SoldeInitial = monthData.InitialBalance;
+            NouveauSoldeAu = monthData.FinalBalance;
+            TotalDebit = monthData.TotalDebit;
+            TotalCredit = monthData.TotalCredit;
+            // DirectionNouveauSoldeAu, CreditSoldeInitial, DebitSoldeInitial ne sont pas directement dans MonthlyData, à gérer si nécessaire.
+            // pdfSrc ne sera pas défini pour l'édition (pas de PDF affiché).
+        }
+    }
+
+    private void ClosePdfViewer()
+    {
+        showPdfViewer = false;
+    }
+
+    private void ResetPdfViewerData()
+    {
+        extractedEntries = new List<ExtraitBancaireEntry>();
+        IdentiteBancaire = null;
+        NomBanque = null;
+        SoldeInitial = 0;
+        NouveauSoldeAu = 0;
+        DirectionNouveauSoldeAu = null;
+        TotalDebit = 0;
+        TotalCredit = 0;
+        CreditSoldeInitial = 0;
+        DebitSoldeInitial = 0;
+        filterDate = null;
+        filterLibelle = null;
+        filterDebit = null;
+        filterCredit = null;
+        // Reset PDF view data as well
+        CurrentPdfUrl = null;
+        pdfSrc = null;
+        errorMessage = null;
+        BatcheDate = null;
+        CurrentPage = 1;
+        TotalPages = 1;
+        CurrentZoom = 1.0;
+        Error = null;
+    }
+
+    private async Task SaveMonthlyData()
+    {
+        try
+        {
+            Console.WriteLine("Tentative de sauvegarde des données mensuelles...");
+            if (extractedEntries != null && extractedEntries.Any())
+            {
+                var monthData = MonthlyData.FirstOrDefault(m => m.Month == currentMonth);
+                if (monthData != null)
+                {
+                    monthData.InitialBalance = SoldeInitial;
+                    monthData.Entries = new List<ExtraitBancaireEntry>(extractedEntries);
+                    monthData.UpdateTotals(); // Recalcule toutes les propriétés dépendantes
+                    
+                    // Envoyer les données mensuelles à l'API pour sauvegarde
+                    var response = await Http.PostAsJsonAsync("api/monthlydata/save", monthData);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        errorMessage = $"Erreur lors de la sauvegarde des données mensuelles via l'API : {response.StatusCode}";
+                        // Pour obtenir plus de détails sur l'erreur de l'API, décommentez les lignes ci-dessous :
+                        // var errorContent = await response.Content.ReadAsStringAsync();
+                        // Console.WriteLine($"API Save Error: {errorContent}");
+                    }
+                }
+            }
+            showPdfViewer = false;
+            await LoadMonthlyData(); // Recharger les données après la sauvegarde
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Error = $"Erreur lors de la sauvegarde des données mensuelles: {ex.Message}";
+            Console.WriteLine(Error);
+        }
+    }
+
+    private void UpdateMonthlyData()
+    {
+        var monthData = MonthlyData.FirstOrDefault(m => m.Month == currentMonth);
+        if (monthData != null)
+        {
+            Console.WriteLine($"Mise à jour des données du mois {currentMonth}");
+            monthData.Entries = new List<ExtraitBancaireEntry>(extractedEntries);
+            monthData.InitialBalance = SoldeInitial;
+            monthData.FinalBalance = NouveauSoldeAu;
+            monthData.TotalDebit = TotalDebit;
+            monthData.TotalCredit = TotalCredit;
+            monthData.UpdateTotals();
+            Console.WriteLine($"Données mensuelles mises à jour: {monthData.Entries.Count} opérations");
+        }
+        else
+        {
+            Console.WriteLine($"Mois {currentMonth} non trouvé dans les données mensuelles");
+        }
+    }
+
+    private List<ExtraitBancaireEntry> FilteredEntries
+    {
+        get
+        {
+            var query = extractedEntries.AsQueryable();
+
+            if (filterDate.HasValue)
+            {
+                query = query.Where(e => e.Date.Date == filterDate.Value.Date);
+            }
+
+            if (!string.IsNullOrEmpty(filterLibelle))
+            {
+                query = query.Where(e => e.Libelle.Contains(filterLibelle, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (filterDebit.HasValue)
+            {
+                query = query.Where(e => e.Debit == filterDebit.Value);
+            }
+
+            if (filterCredit.HasValue)
+            {
+                query = query.Where(e => e.Credit == filterCredit.Value);
+            }
+
+            return query.ToList();
+        }
     }
 
     private void OnDateFilterChanged(ChangeEventArgs e)
     {
         filterDate = (DateTime?)e.Value;
-        filterLibelle = null;
-        filterDebit = null;
-        filterCredit = null;
-        StateHasChanged();
     }
 
     private void OnLibelleFilterChanged(ChangeEventArgs e)
     {
         filterLibelle = e.Value?.ToString();
-        filterDate = null;
-        filterDebit = null;
-        filterCredit = null;
-        StateHasChanged();
     }
 
     private void OnDebitFilterChanged(ChangeEventArgs e)
     {
-        if (decimal.TryParse(e.Value?.ToString(), out decimal parsedValue))
+        var value = e.Value?.ToString();
+        if (!string.IsNullOrEmpty(value) && decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var decimalValue))
         {
-            filterDebit = parsedValue;
+            filterDebit = decimalValue;
         }
         else
         {
-            filterDebit = null; // Gérer les cas où l'entrée n'est pas un nombre valide
+            filterDebit = null;
         }
-        filterDate = null;
-        filterLibelle = null;
-        filterCredit = null;
-        StateHasChanged();
     }
 
     private void OnCreditFilterChanged(ChangeEventArgs e)
     {
-        if (decimal.TryParse(e.Value?.ToString(), out decimal parsedValue))
+        var value = e.Value?.ToString();
+        if (!string.IsNullOrEmpty(value) && decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var decimalValue))
         {
-            filterCredit = parsedValue;
+            filterCredit = decimalValue;
         }
         else
         {
-            filterCredit = null; // Gérer les cas où l'entrée n'est pas un nombre valide
+            filterCredit = null;
         }
-        filterDate = null;
-        filterLibelle = null;
-        filterDebit = null;
-        StateHasChanged();
     }
 
-    private void RecalculateTotals()
+    private void ClearAllFilters()
     {
-        TotalDebit = FilteredEntries?.Sum(e => e.Debit) ?? 0;
-        TotalCredit = FilteredEntries?.Sum(e => e.Credit) ?? 0;
-        StateHasChanged();
+        ClearFilters();
     }
 
     private void ClearFilter(string filterType)
@@ -525,87 +1030,570 @@
                 filterCredit = null;
                 break;
         }
-        StateHasChanged();
     }
 
-    private void ClearAllFilters()
+    private void ClearFilters()
     {
         filterDate = null;
         filterLibelle = null;
         filterDebit = null;
         filterCredit = null;
-        StateHasChanged();
-    }
-
-    // Methodes pour Ajouter/Supprimer des lignes
-    private void DeleteEntry(ExtraitBancaireEntry entryToDelete)
-    {
-        if (extractedEntries != null)
-        {
-            extractedEntries.Remove(entryToDelete);
-            RecalculateTotals();
-            StateHasChanged();
-        }
     }
 
     private void AddEntry(ExtraitBancaireEntry? existingEntry = null)
     {
-        if (extractedEntries == null)
-        {
-            extractedEntries = new List<ExtraitBancaireEntry>();
-        }
-
         var newEntry = new ExtraitBancaireEntry
         {
-            Date = DateTime.Today, // Date par defaut
-            Libelle = "Nouvelle opération", // Libelle par defaut
+            Date = DateTime.Now,
+            Libelle = "Nouvelle opération",
             Debit = 0,
-            Credit = 0
+            Credit = 0,
+            IsManuallyAdded = true
         };
 
+        int insertIndex = 0;
         if (existingEntry != null)
         {
-            int index = extractedEntries.IndexOf(existingEntry);
-            if (index != -1)
+            insertIndex = extractedEntries.IndexOf(existingEntry);
+        }
+
+        extractedEntries.Insert(insertIndex, newEntry);
+        UpdateMonthlyData();
+    }
+
+    private void DeleteEntry(ExtraitBancaireEntry entry)
+    {
+        extractedEntries.Remove(entry);
+        UpdateMonthlyData();
+    }
+
+    private void MoveEntryUp(ExtraitBancaireEntry entry)
+    {
+        var index = extractedEntries.IndexOf(entry);
+        if (index > 0)
+        {
+            extractedEntries.RemoveAt(index);
+            extractedEntries.Insert(index - 1, entry);
+            UpdateMonthlyData();
+        }
+    }
+
+    private void MoveEntryDown(ExtraitBancaireEntry entry)
+    {
+        var index = extractedEntries.IndexOf(entry);
+        if (index < extractedEntries.Count - 1)
+        {
+            extractedEntries.RemoveAt(index);
+            extractedEntries.Insert(index + 1, entry);
+            UpdateMonthlyData();
+        }
+    }
+
+    private void RecalculateTotals()
+    {
+        // Ceci est appelé sur chaque changement d'entrée pour s'assurer que les totaux sont à jour
+        // Le calcul réel se fait via UpdateMonthlyData quand les données sont sauvegardées ou chargées.
+        // Pour une mise à jour visuelle immédiate, vous pourriez appeler StateHasChanged();
+        StateHasChanged();
+    }
+
+    private async Task ExtractPdf()
+    {
+        await ExtractData();
+    }
+
+    private async Task HandleFileSelection(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            file = e.File;
+            selectedFileName = file.Name;
+            var base64Content = await ConvertFileToBase64(file);
+            pdfSrc = $"data:application/pdf;base64,{base64Content}";
+            // Génère les miniatures pour le modal de division
+            await GeneratePdfThumbnails(base64Content);
+            // Obtenir le nombre total de pages
+            var base64WithoutPrefix = base64Content;
+            totalPages = pdfThumbnails.Count;
+            currentPage = 1;
+            await JSRuntime.InvokeVoidAsync("updatePdfView", "pdfFrame", pdfSrc);
+            Error = null;
+        }
+        catch (Exception ex)
+        {
+            Error = $"Erreur lors de la sélection du fichier: {ex.Message}";
+            Console.WriteLine(Error);
+        }
+    }
+
+    private async Task ExtractData()
+    {
+        try
+        {
+            isLoading = true;
+            buttonText = "Extraction en cours...";
+            Error = null; // Clear previous errors
+            Console.WriteLine("Début de l'extraction du PDF...");
+
+            if (selectedFileName == null)
             {
-                extractedEntries.Insert(index + 1, newEntry);
+                Error = "Veuillez sélectionner un fichier PDF.";
+                Console.WriteLine(Error);
+                isLoading = false;
+                buttonText = "Extraire";
+                return;
+            }
+
+            var base64Content = await ConvertFileToBase64(file);
+            var request = new PdfExtractionRequest
+            {
+                FileName = selectedFileName,
+                Base64Content = base64Content
+            };
+
+            var response = await Http.PostAsJsonAsync("extractpdf", request);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var extractionResult = await response.Content.ReadFromJsonAsync<ExtractionResult>();
+                if (extractionResult != null)
+                {
+                    UpdateExtractionResult(extractionResult);
+                    // Log the full extraction result
+                    Console.WriteLine($"Résultat extraction réussi: {JsonSerializer.Serialize(extractionResult)}");
+                    Error = null; // Clear any previous error on success
+                }
+                else
+                {
+                    Error = "La réponse d'extraction est vide.";
+                    Console.WriteLine(Error);
+                }
             }
             else
             {
-                extractedEntries.Add(newEntry); // Repli : ajouter a la fin si l'entree existante non trouvee
+                var errorContent = await response.Content.ReadAsStringAsync();
+                Error = $"Erreur lors de l'extraction du PDF: {response.StatusCode} - {errorContent}";
+                Console.WriteLine(Error);
             }
+        }
+        catch (Exception ex)
+        {
+            Error = $"Une erreur inattendue est survenue lors de l'extraction: {ex.Message}";
+            Console.WriteLine(Error);
+        }
+        finally
+        {
+            isLoading = false;
+            buttonText = "Extraire";
+        }
+    }
+
+    private async Task SplitPdf()
+    {
+        if (pdfThumbnails.Count == 0 || isSplitting)
+            return;
+        isSplitting = true;
+        splitPdfMessage = string.Empty;
+        StateHasChanged();
+        try
+        {
+            if ((splitMode == SplitMode.PerPage && selectedPagesForSplit.Count == 0) ||
+                (splitMode == SplitMode.Custom && string.IsNullOrWhiteSpace(customSplitConfiguration)))
+            {
+                splitPdfMessage = "Veuillez sélectionner au moins une page ou saisir une configuration.";
+                return;
+            }
+            if (string.IsNullOrEmpty(pdfSrc) || !pdfSrc.StartsWith("data:application/pdf;base64,"))
+            {
+                splitPdfMessage = "Erreur: Aucun PDF valide n'est chargé pour la division.";
+                return;
+            }
+            string base64Content = pdfSrc.Replace("data:application/pdf;base64,", "");
+            string pagesToSplitStr;
+            if (splitMode == SplitMode.Custom)
+            {
+                pagesToSplitStr = customSplitConfiguration;
+            }
+            else
+            {
+                pagesToSplitStr = string.Join(",", selectedPagesForSplit.Select(i => (i + 1).ToString()));
+            }
+            var request = new PdfSplitRequest
+            {
+                Base64Content = base64Content,
+                PagesToSplit = pagesToSplitStr
+            };
+            var response = await Http.PostAsJsonAsync("splitpdf", request);
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<SplitPdfResponse>();
+                if (result != null && result.SplitFiles != null && result.SplitFiles.Any())
+                {
+                    splitFileBase64s = result.SplitFiles;
+                    splitFileNames = result.SplitFileNames;
+                    splitPdfMessage = "Succès: PDF divisé en " + splitFileBase64s.Count + " fichier(s).";
+                }
+                else
+                {
+                    splitPdfMessage = "Erreur: La réponse de l'API ne contient pas de fichiers divisés.";
+                }
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                splitPdfMessage = $"Erreur lors de la division du PDF: {response.StatusCode} - {errorContent}";
+            }
+        }
+        catch (Exception ex)
+        {
+            splitPdfMessage = $"Exception détaillée: {ex.Message}";
+        }
+        finally
+        {
+            isSplitting = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task<string> ConvertFileToBase64(IBrowserFile file)
+    {
+        using var stream = file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024);
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms);
+        var fileBytes = ms.ToArray();
+        return Convert.ToBase64String(fileBytes);
+    }
+
+    private void UpdateExtractionResult(ExtractionResult extractionResult)
+    {
+        if (extractionResult.Data != null)
+        {
+            Console.WriteLine($"Mise à jour des données d'extraction: {JsonSerializer.Serialize(extractionResult.Data)}");
+            
+            extractedEntries = extractionResult.Data.Operations.Select(ExtraitBancaireEntry.FromOperation).ToList();
+            Console.WriteLine($"Nombre d'opérations extraites: {extractedEntries.Count}");
+
+            IdentiteBancaire = extractionResult.Data.ReleveIdentiteBancaire;
+            NomBanque = extractionResult.Data.NomBanque;
+            SoldeInitial = extractionResult.Data.SoldeInitial.CreditSoldeInitial - extractionResult.Data.SoldeInitial.DebitSoldeInitial;
+            NouveauSoldeAu = extractionResult.Data.SoldeFinal.NouveauSoldeAu;
+            DirectionNouveauSoldeAu = extractionResult.Data.SoldeFinal.DirectionNouveauSoldeAu;
+            TotalDebit = extractionResult.Data.SoldeFinal.TotalDebit;
+            TotalCredit = extractionResult.Data.SoldeFinal.TotalCredit;
+            CreditSoldeInitial = extractionResult.Data.SoldeInitial.CreditSoldeInitial;
+            DebitSoldeInitial = extractionResult.Data.SoldeInitial.DebitSoldeInitial;
+            BatcheDate = extractionResult.Data.BatcheDate;
+
+            Console.WriteLine($"Données mises à jour: RIB={IdentiteBancaire}, Banque={NomBanque}, SoldeInitial={SoldeInitial}");
+            Console.WriteLine($"Totaux: Débit={TotalDebit}, Crédit={TotalCredit}");
+
+            UpdateMonthlyData();
+            StateHasChanged(); // Forcer la mise à jour de l'interface
         }
         else
         {
-            extractedEntries.Add(newEntry); // Ajouter a la fin si aucune entree existante n'est fournie
+            Console.WriteLine("Aucune donnée dans le résultat d'extraction");
         }
+    }
 
-        RecalculateTotals();
+    private void OpenSplitModal()
+    {
+        showSplitModal = true;
         StateHasChanged();
     }
+
+    private void CloseSplitModal()
+    {
+        showSplitModal = false;
+        splitPdfMessage = string.Empty;
+        splitFileBase64s.Clear();
+        splitFileNames.Clear();
+        pagesToSplit = string.Empty;
+        selectedPages.Clear();
+        StateHasChanged();
+    }
+
+    private bool IsPageSelected(int pageNumber)
+    {
+        return selectedPages.Contains(pageNumber);
+    }
+
+    private void TogglePageSelection(int index)
+    {
+        if (selectedPagesForSplit.Contains(index))
+            selectedPagesForSplit.Remove(index);
+        else
+            selectedPagesForSplit.Add(index);
+        StateHasChanged();
+    }
+
+    private void AddPageToSelection(int pageNumber)
+    {
+        selectedPages.Add(pageNumber);
+        UpdatePagesToSplit();
+    }
+
+    private void SelectAllPages()
+    {
+        selectedPages.Clear();
+        for (int i = 1; i <= totalPages; i++)
+        {
+            selectedPages.Add(i);
+        }
+        UpdatePagesToSplit();
+    }
+
+    private void ClearPageSelection()
+    {
+        selectedPages.Clear();
+        UpdatePagesToSplit();
+    }
+
+    private void UpdatePagesToSplit()
+    {
+        if (selectedPages.Count == 0)
+        {
+            pagesToSplit = string.Empty;
+            return;
+        }
+
+        var sortedPages = selectedPages.OrderBy(p => p).ToList();
+        var ranges = new List<string>();
+        var start = sortedPages[0];
+        var prev = start;
+
+        for (int i = 1; i < sortedPages.Count; i++)
+        {
+            if (sortedPages[i] != prev + 1)
+            {
+                ranges.Add(start == prev ? start.ToString() : $"{start}-{prev}");
+                start = sortedPages[i];
+            }
+            prev = sortedPages[i];
+        }
+        ranges.Add(start == prev ? start.ToString() : $"{start}-{prev}");
+
+        pagesToSplit = string.Join(",", ranges);
+    }
+
+    private async Task DownloadSplitFile(int index)
+    {
+        if (index >= 0 && index < splitFileBase64s.Count)
+        {
+            var fileName = splitFileNames[index];
+            var base64Content = splitFileBase64s[index];
+            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, base64Content);
+        }
+    }
+
+    // Définition de la classe de réponse pour la division de PDF
+    public class SplitPdfResponse
+    {
+        [JsonPropertyName("message")]
+        public string? Message { get; set; }
+        [JsonPropertyName("splitFiles")]
+        public List<string>? SplitFiles { get; set; }
+        [JsonPropertyName("splitFileNames")]
+        public List<string>? SplitFileNames { get; set; }
+    }
+
+    // Génère les miniatures PDF via JS interop
+    private async Task GeneratePdfThumbnails(string base64Pdf)
+    {
+        isThumbnailsLoading = true;
+        pdfThumbnails.Clear();
+        try
+        {
+            pdfThumbnails = await JSRuntime.InvokeAsync<List<string>>("pdfThumbnails.generateThumbnails", base64Pdf);
+            // Initialiser la sélection selon le mode actuel
+            if (splitMode == SplitMode.PerPage)
+            {
+                // En mode "Par page", sélectionner automatiquement toutes les pages
+                selectedPagesForSplit = Enumerable.Range(0, pdfThumbnails.Count).ToList();
+            }
+            else
+            {
+                // En mode "Personnalisé", commencer avec une sélection vide
+                selectedPagesForSplit.Clear();
+            }
+        }
+        catch (Exception ex)
+        {
+            Error = "Erreur lors de la génération des miniatures : " + ex.Message;
+        }
+        isThumbnailsLoading = false;
+        StateHasChanged();
+    }
+
+    // Drag & drop pour réordonner les pages
+    private void OnDragStart(DragEventArgs e, int index)
+    {
+        dragSourceIndex = index;
+    }
+    private void OnDrop(DragEventArgs e, int index)
+    {
+        if (dragSourceIndex.HasValue && dragSourceIndex.Value != index)
+        {
+            var item = pdfThumbnails[dragSourceIndex.Value];
+            pdfThumbnails.RemoveAt(dragSourceIndex.Value);
+            pdfThumbnails.Insert(index, item);
+            // Met à jour la sélection aussi
+            var page = selectedPagesForSplit[dragSourceIndex.Value];
+            selectedPagesForSplit.RemoveAt(dragSourceIndex.Value);
+            selectedPagesForSplit.Insert(index, page);
+            StateHasChanged();
+        }
+        dragSourceIndex = null;
+    }
+    private void SelectAllPagesForSplit()
+    {
+        selectedPagesForSplit = Enumerable.Range(0, pdfThumbnails.Count).ToList();
+        StateHasChanged();
+    }
+    private void ClearAllPagesForSplit()
+    {
+        selectedPagesForSplit.Clear();
+        StateHasChanged();
+    }
+
+    private void CloseBootstrapModal()
+    {
+        showBootstrapModal = false;
+    }
+
+    private void ClosePdfViewerModal()
+    {
+        showPdfViewerModal = false;
+        StateHasChanged();
+    }
+
+    private void OnSplitModeChanged()
+    {
+        if (splitMode == SplitMode.PerPage)
+        {
+            // En mode "Par page", sélectionner automatiquement toutes les pages
+            selectedPagesForSplit = Enumerable.Range(0, pdfThumbnails.Count).ToList();
+        }
+        else if (splitMode == SplitMode.Custom)
+        {
+            // En mode "Personnalisé", vider la sélection pour laisser l'utilisateur choisir
+            selectedPagesForSplit.Clear();
+        }
+        StateHasChanged();
+    }
+
+    private void OnCustomConfigurationChanged(ChangeEventArgs e)
+    {
+        customSplitConfiguration = e.Value?.ToString() ?? string.Empty;
+    }
+
+    private void ApplyCustomConfiguration()
+    {
+        try
+        {
+            selectedPagesForSplit.Clear();
+            customConfigurationMessage = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(customSplitConfiguration))
+            {
+                customConfigurationMessage = "Veuillez saisir une configuration de division.";
+                StateHasChanged();
+                return;
+            }
+
+            // Découper par '/' pour obtenir les groupes (fichiers)
+            var groups = customSplitConfiguration.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var allValidPages = new List<int>();
+            var groupSummaries = new List<string>();
+            int groupIndex = 1;
+
+            foreach (var group in groups)
+            {
+                // Utiliser '.' comme séparateur de pages/plages
+                var parts = group.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var validPages = new List<int>();
+                foreach (var part in parts)
+                {
+                    var trimmedPart = part.Trim();
+                    if (trimmedPart.Contains('-'))
+                    {
+                        var rangeParts = trimmedPart.Split('-');
+                        if (rangeParts.Length == 2 &&
+                            int.TryParse(rangeParts[0].Trim(), out int start) &&
+                            int.TryParse(rangeParts[1].Trim(), out int end))
+                        {
+                            if (start > end)
+                            {
+                                customConfigurationMessage = $"Erreur : plage invalide '{trimmedPart}' (début > fin) dans le groupe {groupIndex}";
+                                StateHasChanged();
+                                return;
+                            }
+                            start = Math.Max(1, start) - 1;
+                            end = Math.Min(pdfThumbnails.Count, end) - 1;
+                            for (int i = start; i <= end; i++)
+                            {
+                                if (!validPages.Contains(i))
+                                    validPages.Add(i);
+                            }
+                        }
+                        else
+                        {
+                            customConfigurationMessage = $"Erreur : format de plage invalide '{trimmedPart}' dans le groupe {groupIndex}";
+                            StateHasChanged();
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        if (int.TryParse(trimmedPart, out int pageNumber))
+                        {
+                            var index = pageNumber - 1;
+                            if (index >= 0 && index < pdfThumbnails.Count)
+                            {
+                                if (!validPages.Contains(index))
+                                    validPages.Add(index);
+                            }
+                            else
+                            {
+                                customConfigurationMessage = $"Erreur : page {pageNumber} n'existe pas (PDF a {pdfThumbnails.Count} pages), groupe {groupIndex}";
+                                StateHasChanged();
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            customConfigurationMessage = $"Erreur : page invalide '{trimmedPart}' dans le groupe {groupIndex}";
+                            StateHasChanged();
+                            return;
+                        }
+                    }
+                }
+                if (validPages.Count == 0)
+                {
+                    customConfigurationMessage = $"Erreur : aucun numéro de page valide dans le groupe {groupIndex}.";
+                    StateHasChanged();
+                    return;
+                }
+                allValidPages.AddRange(validPages);
+                var pageNumbers = validPages.Select(x => x + 1).OrderBy(x => x).ToList();
+                groupSummaries.Add($"Fichier {groupIndex} : pages {string.Join(", ", pageNumbers)}");
+                groupIndex++;
+            }
+
+            if (allValidPages.Count == 0)
+            {
+                customConfigurationMessage = "Aucune page valide sélectionnée.";
+            }
+            else
+            {
+                customConfigurationMessage = $"Succès : {groups.Length} fichier(s) seront créés.\n" + string.Join("\n", groupSummaries);
+            }
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            customConfigurationMessage = $"Erreur lors de l'application de la configuration : {ex.Message}";
+            StateHasChanged();
+        }
+    }
 }
-
-<style>
-    input.form-control.small-input,
-    .small-input.form-control,
-    .input-group-text {
-        height: 24px !important;
-        padding: .15rem .5rem !important;
-        font-size: .875rem;
-        line-height: 1.5;
-    }
-
-    /* Styles pour les boutons modernes */
-    .btn-info.rounded {
-        border-radius: .5rem; /* Plus arrondi */
-    }
-
-    .form-control.rounded {
-        border-radius: .5rem; /* Plus arrondi */
-    }
-
-    /* Optionnel: Hover effect pour les boutons */
-    .btn-info:hover {
-        filter: brightness(1.1); /* Rendre légèrement plus lumineux au survol */
-    }
-</style> 
